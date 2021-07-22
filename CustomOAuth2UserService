@@ -1,0 +1,79 @@
+package com.accenture.uka21.security.oauth2
+
+import com.accenture.uka21.domain.UserDocument
+import com.accenture.uka21.exception.OAuth2AuthenticationProcessingException
+import com.accenture.uka21.model.AuthProvider
+import com.accenture.uka21.repository.UserRepository
+import com.accenture.uka21.security.UserPrincipal
+import com.accenture.uka21.security.oauth2.user.OAuth2UserInfo
+import com.accenture.uka21.security.oauth2.user.OAuth2UserInfoFactory
+import org.springframework.beans.factory.annotation.Autowired
+import org.springframework.security.authentication.InternalAuthenticationServiceException
+import org.springframework.security.core.AuthenticationException
+import org.springframework.security.oauth2.client.userinfo.DefaultOAuth2UserService
+import org.springframework.security.oauth2.client.userinfo.OAuth2UserRequest
+import org.springframework.security.oauth2.core.user.OAuth2User
+import org.springframework.stereotype.Service
+import org.springframework.util.StringUtils
+import java.util.*
+
+@Service
+class CustomOAuth2UserService : DefaultOAuth2UserService() {
+
+    @Autowired
+    lateinit var userRepository: UserRepository
+
+    override fun loadUser(oAuth2UserRequest: OAuth2UserRequest): OAuth2User {
+        val oAuth2User: OAuth2User = super.loadUser(oAuth2UserRequest)
+        return try {
+            processOAuth2User(oAuth2UserRequest, oAuth2User)
+        } catch (ex: AuthenticationException) {
+            throw ex
+        } catch (ex: Exception) {
+            throw InternalAuthenticationServiceException(ex.message, ex.cause)
+        }
+    }
+
+    private fun processOAuth2User(oAuth2UserRequest: OAuth2UserRequest, oAuth2User: OAuth2User): OAuth2User {
+        val oAuth2UserInfo: OAuth2UserInfo = OAuth2UserInfoFactory.getOAuth2UserInfo(
+            oAuth2UserRequest.clientRegistration.registrationId,
+            oAuth2User.attributes
+        )
+        if (StringUtils.isEmpty(oAuth2UserInfo.email.isEmpty())) {
+            throw OAuth2AuthenticationProcessingException("Email not found from OAuth2 provider")
+        }
+        val userOptional: Optional<UserDocument> = userRepository.findByEmail(oAuth2UserInfo.email)
+        var userDocument: UserDocument
+        if (userOptional.isPresent) {
+            userDocument = userOptional.get()
+            if (!userDocument.provider.equals(AuthProvider.valueOf(oAuth2UserRequest.clientRegistration.registrationId))) {
+                throw OAuth2AuthenticationProcessingException(
+                    "Looks like you're signed up with " +
+                            userDocument.provider.toString() + " account. Please use your " + userDocument.provider.toString() +
+                            " account to login."
+                )
+            }
+            userDocument = updateExistingUser(userDocument, oAuth2UserInfo)
+        } else {
+            userDocument = registerNewUser(oAuth2UserRequest, oAuth2UserInfo)
+        }
+        return UserPrincipal.create(userDocument, oAuth2User.attributes)
+    }
+
+    private fun registerNewUser(oAuth2UserRequest: OAuth2UserRequest, oAuth2UserInfo: OAuth2UserInfo): UserDocument {
+        val user = UserDocument(
+            provider = AuthProvider.valueOf(oAuth2UserRequest.clientRegistration.registrationId),
+            providerId = oAuth2UserInfo.id,
+            name = oAuth2UserInfo.name,
+            email = oAuth2UserInfo.email,
+            imageUrl = oAuth2UserInfo.imageUrl,
+            password = null
+        )
+        return userRepository.save(user)
+    }
+
+    private fun updateExistingUser(existingUser: UserDocument, oAuth2UserInfo: OAuth2UserInfo): UserDocument {
+        val updatedUser = existingUser.copy(name = oAuth2UserInfo.name, imageUrl = oAuth2UserInfo.imageUrl)
+        return userRepository.save(updatedUser)
+    }
+}
