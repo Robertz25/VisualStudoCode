@@ -1,0 +1,7 @@
+package com.accenture.uka21.exception;
+
+import org.springframework.http.HttpStatus;
+import org.springframework.web.bind.annotation.ResponseStatus;
+
+@ResponseStatus(code = HttpStatus.NOT_FOUND)
+class QuestionNotFoundException(number: Int) : Exception("A question with number $number does not exist")
